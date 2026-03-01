@@ -1,6 +1,6 @@
 [workspace]
 resolver="3"
-members = ["chat-repl"]
+members = ["chat-repl", "rag"]
 
 [workspace.dependencies]
 anyhow = "~1.0"
