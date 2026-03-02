@@ -1,0 +1,25 @@
+[package]
+name = "chat-repl"
+version = "0.1.0"
+edition = "2024"
+authors = ["Jorge D. Ortiz-Fuentes"]
+description = "Starting point for a chat REPL using LLM"
+readme = "../README.md"
+repository = "https://github.com/jdortiz/rs-ai"
+license = "Apache-2.0"
+keywords = ["ai"]
+
+[dependencies]
+anyhow = { workspace = true }
+dotenvy = { workspace = true }
+env_logger = { workspace = true }
+llm = "~1.3"
+log = { workspace = true }
+rustyline = { workspace = true }
+tokio = { workspace = true }
+
+[features]
+open-ai-api = []
+
+[lints]
+workspace = true
