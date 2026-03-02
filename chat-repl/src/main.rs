@@ -3,7 +3,8 @@ use llm::{
     builder::{LLMBackend, LLMBuilder}, // Builder pattern components
     chat::ChatMessage,                 // Chat-related structures
 };
-use log::{error, info};
+use log::{error, info, warn};
+use rustyline::{DefaultEditor, error::ReadlineError};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -17,32 +18,39 @@ async fn main() -> anyhow::Result<()> {
     let llm = build_llm();
 
     // Prepare conversation history with example messages
-    let messages = vec![
+    let mut messages = vec![
         ChatMessage::user().content("Hello. Call me Jorge.").build(),
         ChatMessage::assistant()
             .content("Hello, Jorge! How can I help you today.")
             .build(),
-        ChatMessage::user()
-            .content("Write a declarative macro to create a HashMap using any number of tuples.")
-            .build(),
     ];
 
-    // Send chat request and handle the response
-    match llm.chat(&messages).await {
-        Ok(response) => {
-            // Print the response text
-            if let Some(text) = response.text() {
-                println!("Response: {text}");
+    let mut rl = DefaultEditor::new()?;
+    println!("Greetings Professor Falken!\n\nHow are you feeling today?");
+    loop {
+        let readline = rl.readline("WOPR > ");
+        match readline {
+            Ok(line) => {
+                if !line.trim().is_empty() {
+                    messages.push(ChatMessage::user().content(line).build());
+                    chat_interaction(&llm, &mut messages).await;
+                } else {
+                    warn!("Empty prompt.");
+                }
             }
-            // Print usage information
-            if let Some(usage) = response.usage() {
-                info!("  Prompt tokens: {}", usage.prompt_tokens);
-                info!("  Completion tokens: {}", usage.completion_tokens);
-            } else {
-                info!("No usage information available");
+            Err(ReadlineError::Interrupted) => {
+                warn!("Ctrl-C Interrupted");
+                break;
+            }
+            Err(ReadlineError::Eof) => {
+                warn!("Ctrl-D Finished");
+                break;
+            }
+            Err(err) => {
+                error!("Error: {err:?}");
+                break;
             }
         }
-        Err(e) => error!("Chat error: {e}"),
     }
     Ok(())
 }
@@ -75,4 +83,25 @@ fn build_llm() -> Box<dyn LLMProvider> {
         .system("You are an expert software engineer that uses Rust as their main programming language.")
         .build()
         .expect("Failed to build LLM")
+}
+
+async fn chat_interaction(llm: &Box<dyn LLMProvider>, messages: &mut Vec<ChatMessage>) {
+    // Send chat request and handle the response
+    match llm.chat(&messages).await {
+        Ok(response) => {
+            // Print the response text
+            if let Some(text) = response.text() {
+                println!("Response: {text}");
+                messages.push(ChatMessage::assistant().content(text).build());
+            }
+            // Print usage information
+            if let Some(usage) = response.usage() {
+                info!("  Prompt tokens: {}", usage.prompt_tokens);
+                info!("  Completion tokens: {}", usage.completion_tokens);
+            } else {
+                info!("No usage information available");
+            }
+        }
+        Err(e) => error!("Chat error: {e}"),
+    }
 }

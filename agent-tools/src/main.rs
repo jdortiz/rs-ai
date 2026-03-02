@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::{self, read_to_string},
     path::Path,
 };
@@ -6,6 +7,7 @@ use std::{
 use anyhow::{Result, bail};
 use log::{debug, error, info, warn};
 use rig::{
+    agent::Agent,
     client::CompletionClient,
     completion::{Completion, CompletionModel, Message},
     message::AssistantContent,
@@ -15,13 +17,34 @@ use rig::{client::Nothing, providers::ollama};
 #[cfg(feature = "open-ai-api")]
 use rig::{client::ProviderClient, providers::openai};
 use rustyline::{DefaultEditor, error::ReadlineError};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 const AGENT_RULES: &str = r#"
-You are an expert software engineer that uses Rust as their main programming language.
+You are an AI agent expert in software engineering, that can perform tasks by using available tools.  You use Rust as your main programming language
 
-If you don't know the answer, say \"I don't know\".
+Available tools:
+- list_files: arguments ()  returns [str]: List all files in the current directory.
+- read_file: arguments (file_name: str), returns str: Read the content of a file.
+- terminate: arguments (message: str) returns (): End the agent loop and print a summary to the user.
+
+If a user asks about files, list them before reading.
+
+Every response MUST have an action, even if it is the terminate one, and an explanation.
+Use this format, including the back quotes, for the action:
+```action
+{
+    "tool_name": "insert tool_name",
+    "args": {...fill in any required arguments here...}
+}
+```
 "#;
+
+#[derive(Deserialize)]
+struct Action {
+    tool_name: String,
+    args: HashMap<String, String>,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -59,21 +82,15 @@ async fn main() -> anyhow::Result<()> {
         match readline {
             Ok(line) => {
                 if !line.trim().is_empty() {
-                    let completion_response = agent
-                        .completion(&line, chat_history.to_owned())
-                        .await?
-                        .send()
-                        .await?;
-                    let AssistantContent::Text(response) = completion_response.choice.first()
-                    else {
-                        bail!("Non textual response:\n{:?}", completion_response.choice);
-                    };
-                    let response = response.text();
-
-                    println!("{response}");
-                    // Add new information to memory
-                    chat_history.push(Message::user(line));
-                    chat_history.push(Message::assistant(response));
+                    match perform_agent_loop(&agent, &line, &mut chat_history).await {
+                        Ok(agent_response) => {
+                            info!("Agent response:\n[[[--\n{agent_response}\n--]]]");
+                            info!("Processing.");
+                        }
+                        Err(err) => {
+                            error!("Agent error: {err:?}");
+                        }
+                    }
                 } else {
                     warn!("Empty prompt.");
                 }
@@ -96,7 +113,87 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/*
+/// Makes the agent iterate to achieve the goal.
+async fn perform_agent_loop<C: CompletionModel>(
+    agent: &Agent<C>,
+    user_input: &str,
+    chat_history: &mut Vec<Message>,
+) -> Result<String> {
+    const MAX_ITERATIONS: u32 = 20;
+    let mut iteration: u32 = 0;
+    let mut finish = false;
+    let mut agent_input = String::from(user_input);
+    loop {
+        let mut agent_response = String::new();
+        debug!(
+            "Iteration {iteration} Task: {user_input}\nInput: {agent_input}\nHistory: {chat_history:?}"
+        );
+        let completion_response = agent
+            .completion(&agent_input, chat_history.to_owned())
+            .await?
+            .send()
+            .await?;
+        let AssistantContent::Text(response) = completion_response.choice.first() else {
+            bail!("Non textual response:\n{:?}", completion_response.choice);
+        };
+        let response = response.text();
+        debug!("AI:\n<<<--\n{response}\n-->>>");
+        let next_agent_input: String = match parse_action(response) {
+            Ok(action_request) => {
+                let result = match action_request.tool_name.as_str() {
+                    "list_files" => {
+                        debug!("Requested 'list_files' action");
+                        list_files()
+                    }
+                    "read_file" => {
+                        debug!("Requested 'read_file' action");
+                        if let Some(file_name) = action_request.args.get("file_name") {
+                            read_file(file_name)
+                        } else {
+                            json!({"error": "Missing file_name argument."})
+                        }
+                    }
+                    "terminate" => {
+                        debug!("Requested 'terminate' action");
+                        finish = true;
+                        terminate("That's all folks!")
+                    }
+                    _ => {
+                        debug!("Requested unexpected action");
+                        json!({"error": "unknown tool"})
+                    }
+                };
+                debug!("Tool:\n[[[--\n{result}\n--]]]");
+                info!(
+                    "Iteration {iteration} Task: {user_input}\nInput: {agent_input}\nResponse: {response}"
+                );
+                if finish {
+                    agent_response = result.to_string();
+                }
+                iteration += 1;
+                if iteration >= MAX_ITERATIONS {
+                    bail!("Too many iterations");
+                }
+                result.to_string()
+            }
+            Err(err) => {
+                warn!("No more actions: {err}");
+                agent_response = response.to_string();
+                finish = true;
+
+                String::new()
+            }
+        };
+        // Add new information to memory
+        chat_history.push(Message::user(agent_input));
+        chat_history.push(Message::assistant(response));
+        agent_input = next_agent_input;
+        if finish {
+            return Ok(agent_response);
+        }
+    }
+}
+
 // tools
 fn list_files() -> Value {
     match fs::read_dir(Path::new(".")) {
@@ -178,4 +275,3 @@ pub fn extract_action_block(markdown: &str) -> Option<String> {
     }
     None
 }
-*/
