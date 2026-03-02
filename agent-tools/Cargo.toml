@@ -1,9 +1,9 @@
 [package]
-name = "rag"
+name = "agent-tools"
 version = "0.1.0"
 edition = "2024"
 authors = ["Jorge D. Ortiz-Fuentes"]
-description = "Starting point for implementing RAG using Rig"
+description = "Starting point for an agent using tools with Rig"
 readme = "../README.md"
 repository = "https://github.com/jdortiz/rs-ai"
 license = "Apache-2.0"
@@ -14,11 +14,11 @@ anyhow = { workspace = true }
 dotenvy = { workspace = true }
 env_logger = { workspace = true }
 log = { workspace = true }
-rig-core = {  workspace = true, features = ["derive"] }
+rig-core = { workspace = true }
 rustyline = { workspace = true }
 serde = { workspace = true }
+serde_json = "~1.0"
 tokio = { workspace = true }
-ulid = { version = "1.2.1", features = ["serde"] }
 
 [features]
 open-ai-api = []
