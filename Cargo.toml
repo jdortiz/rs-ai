@@ -1,0 +1,10 @@
+[workspace]
+resolver="3"
+
+[workspace.dependencies]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = "warn"
