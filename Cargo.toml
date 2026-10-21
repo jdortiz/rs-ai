@@ -1,7 +1,14 @@
 [workspace]
 resolver="3"
+members = ["chat-repl"]
 
 [workspace.dependencies]
+anyhow = "1.0"
+dotenvy = "0.15"
+rustyline = "19.0"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
