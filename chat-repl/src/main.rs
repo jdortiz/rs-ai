@@ -3,7 +3,8 @@ use llm::{
     builder::{LLMBackend, LLMBuilder}, // Builder pattern components
     chat::ChatMessage,                 // Chat-related structures
 };
-use tracing::{error, info, info_span};
+use rustyline::{DefaultEditor, error::ReadlineError};
+use tracing::{Instrument, debug, error, field, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -32,37 +33,103 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Prepare conversation history with example messages
-    let messages = vec![
+    let mut messages = vec![
         ChatMessage::user().content("Hello. Call me Jorge.").build(),
         ChatMessage::assistant()
             .content("Hello, Jorge! How can I help you today?")
             .build(),
-        ChatMessage::user()
-            .content("Write a declarative macro to create a HashMap using any number of tuples.")
-            .build(),
     ];
 
-    // Send chat request and handle the response
-    match llm.chat(&messages).await {
+    let mut rl = DefaultEditor::new()?;
+
+    println!("Greetings Professor Falken!\n\nHow are you feeling today?");
+    let mut turn = 0_u32;
+
+    loop {
+        let readline = rl.readline("WOPR > ");
+        match readline {
+            Ok(line) => {
+                if line.trim().is_empty() {
+                    warn!(reason = "empty_prompt", "Ignoring empty prompt");
+                } else {
+                    turn += 1;
+                    let input_chars = line.chars().count();
+                    messages.push(ChatMessage::user().content(line).build());
+                    // Send chat request and handle the response
+                    chat_interaction(&*llm, &mut messages, turn, input_chars).await;
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                warn!(reason = "interrupt", "Interactive session interrupted");
+                break;
+            }
+            Err(ReadlineError::Eof) => {
+                warn!(reason = "eof", "Interactive session finished");
+                break;
+            }
+            Err(err) => {
+                error!(error = %err, "Reading interactive input failed");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn chat_interaction(
+    llm: &dyn LLMProvider,
+    messages: &mut Vec<ChatMessage>,
+    turn: u32,
+    input_chars: usize,
+) {
+    let turn_span = info_span!(
+        "turn",
+        turn,
+        input_chars,
+        messages_before = messages.len(),
+        messages_after = field::Empty,
+        response_chars = field::Empty,
+        prompt_tokens = field::Empty,
+        completion_tokens = field::Empty,
+        outcome = field::Empty,
+    );
+
+    let response_result = llm.chat(messages).instrument(turn_span.clone()).await;
+
+    match response_result {
         Ok(response) => {
             // Print the response text
             if let Some(text) = response.text() {
                 println!("Response: {text}");
+                turn_span.record("response_chars", text.chars().count());
+                turn_span.record("outcome", "ok");
+                messages.push(ChatMessage::assistant().content(text).build());
             }
             // Print usage information
             if let Some(usage) = response.usage() {
-                info!(
-                    prompt_tokens = usage.prompt_tokens,
-                    completion_tokens = usage.completion_tokens,
-                    "Chat token usage"
-                );
+                turn_span.record("prompt_tokens", usage.prompt_tokens);
+                turn_span.record("completion_tokens", usage.completion_tokens);
+                turn_span.in_scope(|| {
+                    info!(
+                        prompt_tokens = usage.prompt_tokens,
+                        completion_tokens = usage.completion_tokens,
+                        "Chat token usage"
+                    );
+                });
             } else {
-                info!("Chat provider returned no usage information");
+                turn_span.in_scope(|| info!("Chat provider returned no usage information"));
             }
         }
-        Err(err) => error!(error = %err, "Chat request failed"),
+        Err(err) => {
+            turn_span.record("outcome", "provider_error");
+            turn_span.in_scope(|| error!(error = %err, "Chat request failed"));
+        }
     }
-    Ok(())
+    turn_span.record("messages_after", messages.len());
+    turn_span.in_scope(|| {
+        debug!("Chat turn completed");
+    });
 }
 
 #[cfg(not(feature = "open-ai-api"))]
