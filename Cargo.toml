@@ -1,11 +1,13 @@
 [workspace]
 resolver="3"
-members = ["chat-repl", "rag"]
+members = ["agent-tools","chat-repl", "rag"]
 
 [workspace.dependencies]
 anyhow = "1.0"
 dotenvy = "0.15"
+rig-core = { version = "0.45", features = ["derive", "reqwest"] }
 rustyline = "19.0"
+serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

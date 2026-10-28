@@ -12,9 +12,9 @@ keywords = ["ai"]
 [dependencies]
 anyhow = { workspace = true }
 dotenvy = { workspace = true }
-rig-core = { version = "0.45", features = ["derive", "reqwest"] }
+rig-core = { workspace = true }
 rustyline = { workspace = true }
-serde = { version = "1.0", features = ["derive"] }
+serde = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
