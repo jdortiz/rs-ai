@@ -1,14 +1,10 @@
-use std::collections::HashMap;
-
+use rig_agent::AgentBuilder;
 #[cfg(not(feature = "open-ai-api"))]
 use rig_core::providers::ollama;
 #[cfg(feature = "open-ai-api")]
 use rig_core::providers::openai::{self, TEXT_EMBEDDING_ADA_002};
 use rig_core::{
-    Embed,
-    completion::{CompletionRequest, Document},
-    embeddings::EmbeddingsBuilder,
-    vector_store::{VectorSearchRequest, VectorStoreIndex, in_memory_store::InMemoryVectorStore},
+    Embed, embeddings::EmbeddingsBuilder, vector_store::in_memory_store::InMemoryVectorStore,
 };
 use rustyline::{DefaultEditor, error::ReadlineError};
 use serde::{Deserialize, Serialize};
@@ -101,6 +97,19 @@ async fn main() -> anyhow::Result<()> {
         debug!("Indexes created");
         index
     };
+    let agent = {
+        let _span = info_span!(
+            parent: &startup_span,
+            "agent_build",
+        )
+        .entered();
+        let agent = AgentBuilder::new(gen_model)
+            .preamble(AGENT_RULES)
+            .dynamic_context(1, index)
+            .build();
+        debug!("Agent built");
+        agent
+    };
 
     drop(startup_span);
 
@@ -123,42 +132,22 @@ async fn main() -> anyhow::Result<()> {
                         "turn",
                         turn,
                         input_chars,
-                        retrieval = "rig.dynamic_context",
+                        retrieval = "rig.agent",
                         outcome = field::Empty,
                         response_chars = field::Empty,
                     );
-                    let results = index
-                        .top_n::<Note>(
-                            VectorSearchRequest::builder()
-                                .query(line.clone())
-                                .samples(1)
-                                .build(),
-                        )
-                        .instrument(turn_span.clone())
-                        .await?;
-                    let documents = results.into_iter().map(|result| Document {
-                        id: result.id,
-                        text: result.document.content,
-                        additional_props: HashMap::from([(
-                            String::from("title"),
-                            result.document.title,
-                        )]),
-                    });
 
-                    let response_result = gen_model
-                        .call(
-                            CompletionRequest::new(line)
-                                .preamble(AGENT_RULES)
-                                .documents(documents),
-                        )
+                    let response_result = agent
+                        .prompt(line)
+                        .into_future()
                         .instrument(turn_span.clone())
                         .await;
                     match response_result {
                         Ok(response) => {
                             turn_span.record("outcome", "ok");
-                            turn_span.record("response_chars", response.text().chars().count());
+                            turn_span.record("response_chars", response.output().chars().count());
                             turn_span.in_scope(|| debug!("Response received"));
-                            println!("{}", response.text());
+                            println!("{}", response.output());
                         }
                         Err(err) => {
                             turn_span.record("outcome", "provider_or_retrieval_error");

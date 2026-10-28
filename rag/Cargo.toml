@@ -12,6 +12,7 @@ keywords = ["ai"]
 [dependencies]
 anyhow = { workspace = true }
 dotenvy = { workspace = true }
+rig-agent = "0.45"
 rig-core = { workspace = true }
 rustyline = { workspace = true }
 serde = { workspace = true }

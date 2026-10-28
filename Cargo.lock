@@ -2999,6 +2999,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "pin-project"
+version = "1.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2466b2336ed02bcdca6b294417127b90ec92038d1d5c4fbeac971a922e0e0924"
+dependencies = [
+ "pin-project-internal",
+]
+
+[[package]]
+name = "pin-project-internal"
+version = "1.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c96395f0a926bc13b1c17622aaddda1ecb55d49c8f1bf9777e4d877800a43f8b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3250,6 +3270,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dotenvy",
+ "rig-agent",
  "rig-core",
  "rustyline",
  "serde",
@@ -3524,6 +3545,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "rig-agent"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "856f21ab95b8b887df997fb34356aeb1ad5677504461f009c58cd7d48274ef74"
+dependencies = [
+ "async-stream",
+ "futures",
+ "http 1.5.0",
+ "indexmap",
+ "rig-core",
+ "rig-derive",
+ "rig-memory",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-futures",
+]
+
+[[package]]
 name = "rig-core"
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3584,6 +3626,21 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "rig-memory"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d25fcf3f3a478d3ac1c0329aca68fdcb94c87cc32e6f2161463fae65270d58ec"
+dependencies = [
+ "base64 0.22.1",
+ "memchr",
+ "rig-core",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4761,6 +4818,18 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
  "valuable",
+]
+
+[[package]]
+name = "tracing-futures"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
+dependencies = [
+ "futures",
+ "futures-task",
+ "pin-project",
+ "tracing",
 ]
 
 [[package]]
