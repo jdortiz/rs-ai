@@ -1,41 +1,135 @@
-use std::{collections::HashMap, fs, path::Path};
+use std::{fs, io, path::Path};
 
-use anyhow::{anyhow, bail};
+use rig_agent::tool::{Tool, ToolContext};
+use rig_agent::{Agent, AgentBuilder};
 #[cfg(not(feature = "open-ai-api"))]
 use rig_core::providers::ollama;
 #[cfg(feature = "open-ai-api")]
 use rig_core::providers::openai;
-use rig_core::{DynModel, completion::CompletionRequest, message::Message, operation::Completion};
+use rig_core::{DynModel, message::Message, operation::Completion};
 use rustyline::{DefaultEditor, error::ReadlineError};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tracing::{Instrument, Span, debug, debug_span, error, field, info, info_span, warn};
+use tracing::{Instrument, Span, debug, error, field, info, info_span, warn};
 use tracing_subscriber::EnvFilter;
 
 const AGENT_RULES: &str = r#"
-You are an AI agent expert in software engineering, that can perform tasks by using available tools.  You use Rust as your main programming language.
+You are an AI agent expert in software engineering, and you use Rust as your main programming language.
 
-Available tools:
-- list_files: arguments ()  returns [str]: List all files in the current directory.
-- read_file: arguments (file_name: str), returns str: Read the content of a file.
-- terminate: arguments (message: str) returns (): End the agent loop and print a summary to the user.
-
-If a user asks about files, list them before reading.
-
-Every response MUST have an action, even if it is the terminate one, and an explanation.
-Use this format, including the back quotes, for the action:
-```action
-{
-    "tool_name": "insert tool_name",
-    "args": {...fill in any required arguments here...}
-}
-```
+Use the provided tools when the user asks about files. Use list_files before read_file when you need to find a file.
+When you have enough information, answer the user directly without calling another tool.
 "#;
 
 #[derive(Deserialize)]
-struct Action {
-    tool_name: String,
-    args: HashMap<String, String>,
+struct NoArguments {}
+
+struct ListFiles;
+
+impl Tool for ListFiles {
+    const NAME: &'static str = "list_files";
+    type Args = NoArguments;
+    type Output = Vec<String>;
+    type Error = io::Error;
+
+    fn description(&self) -> String {
+        "List all files in the current directory.".to_owned()
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        _args: NoArguments,
+    ) -> Result<Self::Output, Self::Error> {
+        list_files()
+    }
+}
+
+#[derive(Deserialize)]
+struct ReadFileArgs {
+    file_name: String,
+}
+
+struct ReadFile;
+
+impl Tool for ReadFile {
+    const NAME: &'static str = "read_file";
+    type Args = ReadFileArgs;
+    type Output = String;
+    type Error = io::Error;
+
+    fn description(&self) -> String {
+        "Read the content of a file by its path.".to_owned()
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "file_name": {
+                    "type": "string",
+                    "description": "The path of the file to read."
+                }
+            },
+            "required": ["file_name"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: ReadFileArgs,
+    ) -> Result<Self::Output, Self::Error> {
+        read_file(args.file_name)
+    }
+}
+
+#[derive(Deserialize)]
+struct TerminateArgs {
+    message: String,
+}
+
+struct Terminate;
+
+impl Tool for Terminate {
+    const NAME: &'static str = "terminate";
+    type Args = TerminateArgs;
+    type Output = String;
+    type Error = io::Error;
+
+    fn description(&self) -> String {
+        "End the task and provide a final summary message.".to_owned()
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "The final summary to show the user."
+                }
+            },
+            "required": ["message"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn call(
+        &self,
+        _context: &mut ToolContext,
+        args: TerminateArgs,
+    ) -> Result<Self::Output, Self::Error> {
+        Ok(terminate(&args.message))
+    }
 }
 
 #[tokio::main]
@@ -69,6 +163,15 @@ async fn main() -> anyhow::Result<()> {
             .chat(openai::GPT_4O_MINI)
             .into()
     });
+    let agent = startup_span.in_scope(|| {
+        AgentBuilder::new(gen_model)
+            .preamble(AGENT_RULES)
+            .default_max_turns(20)
+            .tool(ListFiles)
+            .tool(ReadFile)
+            .tool(Terminate)
+            .build()
+    });
     drop(startup_span);
 
     let mut chat_history = vec![
@@ -98,8 +201,7 @@ async fn main() -> anyhow::Result<()> {
                         outcome = field::Empty,
                         response_chars = field::Empty,
                     );
-                    match perform_agent_loop(&gen_model, &line, &mut chat_history, &turn_span).await
-                    {
+                    match perform_agent_loop(&agent, &line, &mut chat_history, &turn_span).await {
                         Ok(agent_response) => {
                             turn_span.record("outcome", "ok");
                             turn_span.record("response_chars", agent_response.len());
@@ -116,15 +218,15 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             Err(ReadlineError::Interrupted) => {
-                warn!("Ctrl-C Interrupted");
+                warn!(reason = "interrupt", "Ctrl-C interrupted");
                 break;
             }
             Err(ReadlineError::Eof) => {
-                warn!("Ctrl-D Finished");
+                warn!(reason = "eof", "Ctrl-D finished");
                 break;
             }
             Err(err) => {
-                error!("Error: {err:?}");
+                error!(error = %err, "Reading interactive input failed");
                 break;
             }
         }
@@ -133,213 +235,34 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Makes the agent iterate to achieve the goal.
 async fn perform_agent_loop(
-    gen_model: &DynModel<Completion>,
+    agent: &Agent,
     user_input: &str,
     chat_history: &mut Vec<Message>,
     turn_span: &Span,
 ) -> anyhow::Result<String> {
-    turn_span.in_scope(|| {
-        info!("Agent processing user request.");
-    });
+    turn_span.in_scope(|| info!("Agent processing user request."));
 
-    const MAX_ITERATIONS: u32 = 20;
-    let mut agent_input = String::from(user_input);
+    let response = agent
+        .chat(user_input.to_owned(), chat_history)
+        .instrument(turn_span.clone())
+        .await?;
 
-    for iteration in 1..=MAX_ITERATIONS {
-        let iteration_span = debug_span!(
-            parent: turn_span,
-            "iteration",
-            iteration,
-            input_chars = agent_input.chars().count(),
-            history_messages = chat_history.len(),
-            outcome = field::Empty,
-        );
-
-        iteration_span.in_scope(|| {
-            debug!(
-                task = user_input,
-                agent_input,
-                ?chat_history,
-                "Starting iteration",
-            );
-        });
-
-        let response_result = gen_model
-            .call(
-                CompletionRequest::new(&agent_input)
-                    .preamble(AGENT_RULES)
-                    .messages(chat_history.iter().cloned()),
-            )
-            .instrument(iteration_span.clone())
-            .await;
-
-        match response_result {
-            Ok(response) => {
-                let response_text = response.text().to_owned();
-
-                let action_request = match iteration_span.in_scope(|| parse_action(&response_text))
-                {
-                    Ok(action_request) => {
-                        iteration_span.in_scope(|| {
-                            debug!(
-                                ?action_request.tool_name,
-                                ?action_request.args, "Agent iteration"
-                            )
-                        });
-                        action_request
-                    }
-                    Err(err) => {
-                        iteration_span.record("outcome", "completed");
-                        iteration_span.in_scope(|| {
-                            warn!(error = %err, "No action found; completing turn");
-                        });
-                        return Ok(response_text);
-                    }
-                };
-
-                let is_termination = action_request.tool_name == "terminate";
-                let result = iteration_span.in_scope(|| match action_request.tool_name.as_str() {
-                    "list_files" => {
-                        debug!(action = "list_files", "Executing action");
-                        list_files()
-                    }
-                    "read_file" => {
-                        debug!(action = "read_file", "Executing action");
-                        if let Some(file_name) = action_request.args.get("file_name") {
-                            read_file(file_name)
-                        } else {
-                            json!({"error": "Missing file_name argument."})
-                        }
-                    }
-                    "terminate" => {
-                        debug!(action = "terminate", "Executing action");
-                        terminate(
-                            action_request
-                                .args
-                                .get("message")
-                                .map(String::as_str)
-                                .unwrap_or("That's all folks!"),
-                        )
-                    }
-                    _ => {
-                        debug!("Requested unexpected action");
-                        json!({"error": "unknown tool"})
-                    }
-                });
-
-                if is_termination {
-                    iteration_span.record("outcome", "terminated");
-                    return Ok(action_request
-                        .args
-                        .get("message")
-                        .cloned()
-                        .unwrap_or_else(|| "That's all folks!".to_owned()));
-                }
-
-                // Preserve the action exchange in history, then feed the tool
-                // outcome into the next model request.
-                chat_history.push(Message::user(&agent_input));
-                chat_history.push(Message::assistant(response_text));
-                agent_input = result.to_string();
-                iteration_span.record("outcome", "tool_requested");
-            }
-            Err(err) => {
-                iteration_span.record("outcome", "model_error");
-                turn_span.record("outcome", "agent_error");
-                iteration_span.in_scope(|| {
-                    error!(error = %err, "Agent prompt failed");
-                });
-                return Err(err.into());
-            }
-        }
-    }
-
-    turn_span.record("outcome", "iteration_limit");
-    Err(anyhow!(
-        "Agent exceeded the maximum of {MAX_ITERATIONS} iterations"
-    ))
+    Ok(response.output())
 }
 
-// tools
-fn list_files() -> Value {
-    match fs::read_dir(Path::new(".")) {
-        Ok(paths) => {
-            let files = paths
-                .flatten()
-                .map(|entry| format!("{:?}", entry.path()))
-                .collect::<Vec<String>>();
-            json!({"tool_name": "list_files",
-                   "args": {},
-                   "result": files})
-        }
-        Err(err) => json!({"tool_name": "list_files",
-                           "args": {},
-                           "result": err.to_string() }),
-    }
+fn list_files() -> io::Result<Vec<String>> {
+    fs::read_dir(Path::new("."))?
+        .map(|entry| entry.map(|entry| format!("{:?}", entry.path())))
+        .collect()
 }
 
-fn read_file<P: AsRef<Path>>(filename: P) -> Value {
-    debug!("Reading file: {:?}", filename.as_ref());
-
-    match fs::read_to_string(&filename) {
-        Ok(content) => json!({"tool_name": "read_file",
-                              "args": { "file_name": filename.as_ref().to_str().unwrap_or_default() },
-                              "result": content}),
-        Err(err) => json!({ "tool_name": "read_file",
-                             "args": { "file_name": filename.as_ref().to_str().unwrap_or_default() },
-                             "result": err.to_string() }),
-    }
+fn read_file<P: AsRef<Path>>(filename: P) -> io::Result<String> {
+    debug!(path = ?filename.as_ref(), "Reading file");
+    fs::read_to_string(filename)
 }
 
-fn terminate(msg: &str) -> Value {
-    debug!("{msg}. Hasta la vista!");
-    Value::Object(serde_json::Map::new())
-}
-
-fn parse_action(response: &str) -> anyhow::Result<Action> {
-    let Some(action) = extract_action_block(response) else {
-        warn!("Action missing: {response}");
-        bail!("Err: Found no action");
-    };
-    debug!(action, "Parsed action");
-    let action_request: Action = serde_json::from_str(&action)?;
-
-    Ok(action_request)
-}
-
-pub fn extract_action_block(markdown: &str) -> Option<String> {
-    let mut code_lines = Vec::new();
-    let mut in_code_block = false;
-    let mut found = false;
-
-    for line in markdown.lines() {
-        if in_code_block {
-            if line.trim().starts_with("```") {
-                // End of code block
-                in_code_block = false;
-                if found {
-                    // Return the joined content of the code block
-                    let code_content = code_lines.join("\n");
-                    return Some(code_content);
-                }
-                // Clear the code_lines for any subsequent code blocks
-                code_lines.clear();
-                continue;
-            } else {
-                // Collect the line into the code block
-                code_lines.push(line.to_string());
-            }
-        } else if line.trim().starts_with("```") {
-            // Start of code block
-            let lang = line.trim_start_matches("```").trim();
-            if lang == "action" {
-                in_code_block = true;
-                found = true;
-                code_lines.clear();
-            }
-        }
-    }
-    None
+fn terminate(msg: &str) -> String {
+    debug!(message = msg, "Terminating agent task");
+    msg.to_owned()
 }

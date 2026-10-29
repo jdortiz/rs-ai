@@ -5,6 +5,7 @@ members = ["agent-tools","chat-repl", "rag"]
 [workspace.dependencies]
 anyhow = "1.0"
 dotenvy = "0.15"
+rig-agent = "0.45"
 rig-core = { version = "0.45", features = ["derive", "reqwest"] }
 rustyline = "19.0"
 serde = { version = "1.0", features = ["derive"] }
